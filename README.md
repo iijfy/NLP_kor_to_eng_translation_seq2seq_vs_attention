@@ -1,92 +1,210 @@
 # 🇰🇷🇺🇸 한국어 → 영어 기계번역 (Seq2Seq vs Seq2Seq+Attention)
 
 ## 📌 프로젝트 요약
-한국어 문장을 영어로 번역하는 NMT(Neural Machine Translation) 모델을 직접 구현하고,
-기본 Seq2Seq 모델과 Attention 적용 모델의 성능을 학습 로그/샘플 번역/BLEU로 비교했다.
+한국어 문장을 영어로 번역하는 기계 번역 모델을 직접 구현하고 학습해 보면서,  
+(1) 기본 GRU 기반 Seq2Seq
+(2) Attention 적용 모델의 차이를 확인한 프로젝트
+추가로 “복잡하게 만든 모델(실험 1)”과 “단순하게 정리한 모델(실험 2)”도 비교하면서 왜 성능이 갈리는지까지 정리했습니다.
 
 ---
 
-## 목표
-- 한국어(ko) → 영어(mt) 번역 모델 구축
-- 2가지 구조 비교
-  1) GRU 기반 Seq2Seq (Attention 없음)
-  2) Bahdanau Attention 기반 Seq2Seq + (SentencePiece 토크나이징)
+## 1) 전체 로드맵
+
+- JSON(ko, mt) 병렬 데이터 로드
+- 토큰화 / 어휘사전(Vocab) 구성 / 패딩(PAD) 처리
+- DataLoader 구성으로 배치 학습
+- 모델 2종 구현
+  - 기본 Seq2Seq (GRU Encoder–Decoder)
+  - Seq2Seq + Attention
+- 추가 실험 2종
+  - 실험 1: “구조를 많이 넣은” 고급형(오버엔지니어링) 모델
+  - 실험 2: “필요한 것만 남긴” 단순/안정형 모델
+- 학습 로그/번역 예시/BLEU로 결과 확인
 
 ---
 
-## 데이터
-- JSON 형식
-- 각 샘플은 아래 키를 가짐
-  - "ko": 한국어 원문
-  - "mt": 영어 번역문
+## 2) 데이터셋
 
-예시 경로(환경에 맞게 수정)
-- train: .../일상생활및구어체_한영_train_set.json
-- valid: .../일상생활및구어체_한영_valid_set.json
+- 형식: JSON
+- 각 샘플 구조:
+  - `ko`: 한국어 문장
+  - `mt`: 영어 번역문
 
----
+학습/검증 파일
+- train: `.../일상생활및구어체_한영_train_set.json`
+- valid: `.../일상생활및구어체_한영_valid_set.json`
 
-## 전체 흐름
-1. 데이터 로드 (JSON → (ko, en) pair)
-2. 토크나이징 / 정수 인덱스 변환
-   - 기본 모델: (단어 기반 토큰화)
-   - Attention 모델: SentencePiece(unigram, vocab_size=8000)
-3. 패딩(padding) + DataLoader 구성
-4. 모델 정의
-   - Encoder(GRU) / Decoder(GRU)
-   - Attention 모델은 Decoder가 매 타임스텝마다 “어떤 입력 단어를 참고할지” 가중치를 계산
-5. 학습(Teacher Forcing) + 검증 loss로 best 저장
-6. 평가
-   - 샘플 번역(정성)
-   - BLEU(정량)
+데이터는 총 50,000 쌍으로 확인됨.
 
 ---
 
-## 실험 설정
-- batch_size: 64
-- embedding_dim: 256
-- hidden_dim: 256
-- encoder_layers / decoder_layers: 1
-- dropout: 0.1
-- lr: 0.001
-- epochs: 30
+## 3) 데이터 EDA (내가 확인한 것)
+
+### (1) 도메인 분포
+데이터는 다양한 일상 도메인이 섞여 있음. 
+- daily: 11521
+- travel: 10243
+- food: 7351
+- culture: 4160
+- ...
+
+→ 도메인이 섞여 있으면 “단어/표현 다양성”이 커져서, 토크나이징/어휘사전/UNK 처리가 성능에 더 크게 영향을 줌.
+
+### (2) 문장 길이
+초기 분석에서 최대 길이 96까지 나오는 걸 확인했고,  
+추가 실험에서는 효율을 위해 `MAX_LENGTH = 30` 같은 제한을 두고 실험함.
+
+왜 길이 제한을 두나?
+- 너무 긴 문장까지 전부 맞추면 PAD가 엄청 늘어서 학습이 비효율적
+- Seq2Seq는 긴 문장일수록 정보가 압축돼서 번역 난이도가 급상승
+- 그래서 현실적으로는 “대부분이 커버되는 범위”를 기준으로 제한을 두는 편이 안정적
 
 ---
 
-## 🟨 결과 요약
+## 4) 전처리 / 토크나이징 / Vocab 구성
 
-### 1) 기본 Seq2Seq (Attention 없음)
-- 학습 Loss가 꾸준히 감소
-  - Epoch 1 Loss: 0.7674
-  - Epoch 30 Loss: 0.2691
-- 하지만 샘플 번역에서 반복/의미 없는 출력이 자주 발생 (정성 평가에서 한계가 뚜렷)
+### (1) 특수 토큰 정의
+모델이 문장의 시작과 끝, 패딩을 구분해야 학습이 됨.
 
-### 2) Seq2Seq + Bahdanau Attention + SentencePiece
-- 검증 loss 기준 best 모델이 존재
-  - best Val Loss: 4.819 (Epoch 20에서 best)
-- 최종 BLEU
-  - BLEU: 0.1298
-- 샘플 번역에서 UNK(⁇) 토큰이 다수 등장 → 토크나이저/어휘/디코딩 전략 개선 여지
+- `<SOS>`: 디코더가 문장 생성 시작할 때 쓰는 토큰
+- `<EOS>`: 문장 생성 종료 토큰
+- `<PAD>`: 길이 맞추기용 패딩
+- `<UNK>`: 사전에 없는 단어
+
+대략 아래처럼 사용
+- `SOS_token = 0`, `EOS_token = 1`, `PAD_token = 2`, `UNK_token = 3`
+
+### (2) 왜 Vocab을 직접 만들었나?
+이 미션은 “트랜스포머 토크나이저”를 가져다 쓰는 게 아니라,  
+Seq2Seq 기본기를 익히는 목적이라서
+
+- `Counter`로 단어 빈도 세고
+- `word2index / index2word` 맵 만들고
+- 문장을 인덱스 시퀀스로 바꾸는 파이프라인을 직접 구성함
+
+이 과정을 해봐야,
+- UNK가 왜 늘어나는지
+- PAD를 loss에서 왜 제외해야 하는지
+- vocab size가 성능/학습속도에 왜 영향을 주는지 이게 “감”이 아니라 “구조”로 이해됨.
 
 ---
 
-## 결과 해석
-- 기본 Seq2Seq는 입력 문장이 길어질수록 Encoder가 정보를 압축해서 “기억”하기가 어려움
-  → 번역이 길어지면 의미가 무너지거나 반복이 발생하기 쉬움
-- Attention은 “현재 번역할 단어에 필요한 입력 위치”를 매번 다시 보게 해주므로 구조적으로 유리
-  → 다만 이번 실험에서는
-    - 데이터 규모/문장 다양성
-    - SentencePiece 설정
-    - greedy decoding(탐욕적 디코딩) 한계 때문에 BLEU가 크게 나오지 못함
+## 5) 모델 구성
+
+## A. 기본 Seq2Seq (GRU Encoder–Decoder)
+
+### 핵심 아이디어
+- Encoder가 입력(한국어)을 읽고 hidden state로 압축
+- Decoder가 그 hidden state를 가지고 영어 문장을 한 토큰씩 생성
+
+### Teacher Forcing
+학습 시 디코더 입력을
+- 정답을 넣을 수도 있고(teacher forcing),
+- 모델 예측을 넣을 수도 있음.
+
+왜 쓰나?
+- 초반에 예측이 엉망인데 그걸 다시 입력으로 쓰면 계속 망가져서 학습이 잘 안 됨  
+→ teacher forcing은 초반 학습 안정화에 도움.
 
 ---
 
-## 개선 아이디어
-- 디코딩을 greedy → beam search로 변경
-- SentencePiece vocab_size / model_type(bpe/unigram) 재탐색
-- teacher forcing 비율 스케줄링
-- dropout, layer 수, hidden size 튜닝
-- Transformer 계열로 확장
+## B. Seq2Seq + Attention
+
+### 왜 Attention을 붙였나? 
+기본 Seq2Seq는 “긴 문장”에서 문제 생김.
+
+- Encoder가 모든 정보를 마지막 hidden state 하나에 압축해야 해서
+- 문장 길어지면 앞부분 정보가 소실되기 쉬움
+
+Attention은 디코딩할 때마다
+- “지금 생성하는 토큰에 가장 관련 있는 입력 위치”를 찾아서
+- 그쪽 정보를 더 직접적으로 참고하게 해 줌
+
+한 줄 비유:
+- 기본 Seq2Seq: “요약본만 보고 번역”
+- Attention: “번역하면서 원문을 다시 훑어보는 느낌”
+
+---
+
+## 6) 학습 설정 
+
+### (1) PAD를 Loss에서 무시(ignore)해야 하는 이유
+PAD는 “의미 없는 채우기 토큰”인데,
+PAD까지 정답으로 맞추라고 하면 모델이 엉뚱한 데 에너지를 씀.
+
+그래서 실험에서는:
+- `nn.CrossEntropyLoss(ignore_index=PAD_ID, ...)` 처럼
+- PAD 인덱스를 loss에서 제외함
+
+### (2) 실험 2에서 쓴 안정화 장치들
+- teacher forcing ratio: 0.7 → 0.1로 점점 감소
+- learning rate: 0.001 → 0.0001로 점점 감소
+- label smoothing = 0.1 적용
+- 가장 좋은 val loss 모델 저장(best checkpoint)
+
+---
+
+## 7) 결과
+
+### (1) 기본/Attention 비교 (학습 Loss 기준)
+- 기본 Seq2Seq 최종 Loss: **0.2691**
+- Attention 모델 최종 Loss: **0.2127**
+
+해석:
+- Attention이 단순히 기술적으로 멋있어서가 아니라  
+  실제로 loss를 더 낮추는 방향으로 학습이 잘 됨을 확인.
+
+---
+
+### (2) 추가 실험 결과 (Train/Val Loss)
+
+#### 실험 1 (복잡한 모델 — 내가 ‘람보르기니’라고 표현한 버전)
+- Best Val Loss: 4.819 (Epoch 20)
+- Last (Epoch 30): Train 3.121, Val 5.462
+
+관찰:
+- 구조를 너무 많이 넣으니 학습이 더 잘될 것 같았는데,
+- 실제 출력 예시에서 `<unk>`가 많이 나오고 문장이 반복되는 등
+- “모델이 문장을 제대로 생성하는 감각”이 오히려 흐트러짐
+
+내 결론(한 줄):
+- 구조를 많이 넣는다고 번역이 좋아지는 게 아니라, 데이터/토크나이징/학습 안정화가 먼저다.
+
+#### 실험 2 (단순/정리형 모델 — ‘토요타’ 버전)
+- Best Val Loss: 5.071 (Epoch 16)
+- Last (Epoch 30): Train 3.752, Val 5.558
+- BLEU: 21.69
+
+관찰:
+- 구조는 단순하지만, 학습을 안정적으로 만드는 장치(TF/LR schedule, PAD ignore, best 저장)를 넣으니
+- 평가 지표(BLEU)가 의미 있게 나옴
+
+---
+
+## 🟨 8) 최종 결론 
+
+1) Attention은 “옵션”이 아니라 Seq2Seq의 약점을 직접 찌르는 해결책
+- 기본 Seq2Seq는 긴 문장에서 정보 압축 문제가 생김
+- Attention은 디코딩 시점마다 입력의 중요한 부분을 다시 보게 만들어서  
+  loss가 더 잘 내려가는 흐름을 확인했다. (0.2691 → 0.2127)
+
+2) 모델 구조보다 먼저 챙겨야 하는 건 “데이터 파이프라인”
+- `<unk>`가 늘어나면 번역 품질이 급락한다  
+- 이 문제는 “레이어를 더 쌓는 것”보다  
+  토크나이징/정규화/어휘사전 구성에서 먼저 터진다
+
+3) 실험 1보다 실험 2가 실전적일 때가 많다
+- 실험 1은 복잡한 구조 때문에 튜닝 포인트가 너무 많아짐  
+  → 안정적으로 성능을 뽑기 어려웠다
+- 실험 2는 단순하지만 학습 안정화 장치가 있어서  
+  → BLEU 21.69처럼 측정 가능한 결과를 얻었다
+
+### 다음에 개선한다면
+- 서브워드 토크나이저(BPE/SentencePiece) 도입해서 UNK를 줄이기
+- 길이 제한을 percentile 기반으로 잡고(예: 95% 커버) 과도한 PAD 줄이기
+- Attention 모델에도 동일한 스케줄/체크포인트 전략 적용해서 공정 비교하기
+
+
 
 
 
